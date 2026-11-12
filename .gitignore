@@ -1,0 +1,28 @@
+# ---- NEVER commit secrets or client data ----
+vault/*
+!vault/.gitkeep
+reports/*
+!reports/.gitkeep
+rtkit-user.json
+techkit-user.json
+*.conf
+*.conf.enc
+settings.json
+*.log
+
+# ---- Binaries (download / build locally) ----
+bin/*
+!bin/.gitkeep
+*.exe
+*.zip
+*.7z
+
+# ---- Client backups ----
+Backups/
+
+# ---- OS / editor ----
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
