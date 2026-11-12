@@ -128,4 +128,4 @@ MIT, see [LICENSE](LICENSE).
 
 ---
 
-**Ryan Torres**, IT support student, Montréal · [LinkedIn](https://www.linkedin.com/) · [Portfolio](https://example.com)
+**Ryan Torres**, IT support student, Montréal · [LinkedIn](https://www.linkedin.com/in/jrt96/) · [Portfolio](https://96torj.github.io/)
