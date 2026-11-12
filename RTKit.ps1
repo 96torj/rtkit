@@ -727,80 +727,120 @@ $btnRemove.Add_Click({
 })
 
 # ==========================================================
-#  TAB: Cloud Vault
+#  TAB: Cloud Vault  (simple: pick cloud -> Connect -> sign in)
 # ==========================================================
 $tabVault = New-Tab 'Cloud Vault'
 
-$tabVault.Controls.Add((New-Label 'Encrypted cloud configs (one per client). Each must contain a remote named  clientbackup' 15 15 700))
-$lbVault = New-Object System.Windows.Forms.ListBox
-$lbVault.Location = New-Object System.Drawing.Point(15, 45); $lbVault.Size = New-Object System.Drawing.Size(300, 230)
-$tabVault.Controls.Add($lbVault)
+$tabVault.Controls.Add((New-Label 'Cloud' 15 22 140))
+$cbCloud = New-Object System.Windows.Forms.ComboBox
+$cbCloud.DropDownStyle = 'DropDownList'; $cbCloud.Location = New-Object System.Drawing.Point(160, 20); $cbCloud.Size = New-Object System.Drawing.Size(230, 22)
+@('Google Drive', 'OneDrive', 'Other (manual setup)') | ForEach-Object { [void]$cbCloud.Items.Add($_) }
+$cbCloud.SelectedIndex = 0
+$tabVault.Controls.Add($cbCloud)
 
-$btnNewCfg    = New-Button 'New config (rclone setup)' 340 45 260
-$btnImportCfg = New-Button 'Import an rclone.conf file' 340 90 260
-$btnTestCfg   = New-Button 'Test selected config' 340 135 260
-$btnDelCfg    = New-DangerButton 'Delete selected config' 340 180 260
-$tabVault.Controls.AddRange(@($btnNewCfg, $btnImportCfg, $btnTestCfg, $btnDelCfg))
+$btnConnect = New-BigButton 'CONNECT CLOUD' 160 60 230
+$tabVault.Controls.Add($btnConnect)
+$tabVault.Controls.Add((New-Label "1. Type the client name at the top`n2. Pick the cloud, click CONNECT`n3. Sign in on the web page and click Allow`nThat's it: RT Kit saves, encrypts and tests it." 15 130 390 80))
+
+$tabVault.Controls.Add((New-Label 'Saved clients' 430 20 200))
+$lbVault = New-Object System.Windows.Forms.ListBox
+$lbVault.Location = New-Object System.Drawing.Point(430, 45); $lbVault.Size = New-Object System.Drawing.Size(290, 170)
+$tabVault.Controls.Add($lbVault)
+$btnTestCfg   = New-Button 'Test' 430 225 90
+$btnImportCfg = New-Button 'Import file' 530 225 90
+$btnDelCfg    = New-DangerButton 'Delete' 630 225 90
+$tabVault.Controls.AddRange(@($btnTestCfg, $btnImportCfg, $btnDelCfg))
 
 function Update-VaultLists {
     $cbVault.Items.Clear(); $lbVault.Items.Clear()
     foreach ($n in @(Get-VaultNames)) { [void]$cbVault.Items.Add($n); [void]$lbVault.Items.Add($n) }
 }
 
-function Add-ConfigToVault([string]$PlainPath) {
-    $text = Get-Content $PlainPath -Raw
-    if ($text -notmatch '(?m)^\[clientbackup\]') {
-        if (-not (Ask-YesNo "This config has no remote named 'clientbackup'. The agent will not work with it. Save anyway?")) { return }
-    }
-    $name = Clean-Name ([Microsoft.VisualBasic.Interaction]::InputBox('Client name for this config (no spaces):', $AppName, (Clean-Name $tClient.Text)))
-    if (-not $name) { return }
-    if ((Test-Path (Join-Path $VaultDir "$name.conf.enc")) -and -not (Ask-YesNo "'$name' already exists. Replace it?")) { return }
-    Save-ToVault $name ([IO.File]::ReadAllBytes($PlainPath))
-    Write-UiLog "Saved encrypted config: $name"
-    Update-VaultLists
+function Test-VaultConfig([string]$Name) {
+    $tmp = Join-Path $env:TEMP ("rtkit_{0}.conf" -f [guid]::NewGuid())
+    try {
+        [IO.File]::WriteAllBytes($tmp, (Read-FromVault $Name))
+        & $Rclone lsd 'clientbackup:' --config $tmp --max-depth 1 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+    finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
 }
 
-$btnNewCfg.Add_Click({
+function Add-ConfigToVault([string]$PlainPath, [string]$Name) {
+    $text = Get-Content $PlainPath -Raw
+    if ($text -notmatch '(?m)^\[clientbackup\]') {
+        Show-Msg "The cloud connection was not saved: no remote named 'clientbackup' was found." 'Warning'
+        return $false
+    }
+    if ((Test-Path (Join-Path $VaultDir "$Name.conf.enc")) -and -not (Ask-YesNo "'$Name' already exists. Replace it?")) { return $false }
+    Save-ToVault $Name ([IO.File]::ReadAllBytes($PlainPath))
+    Update-VaultLists
+    Write-UiLog "Saved encrypted config: $Name"
+    if (Test-VaultConfig $Name) {
+        Write-UiLog 'Connection test: OK'
+        Show-Msg "Cloud connected and saved for '$Name'.`n`nNext: Backup Agent page > INSTALL AGENT."
+    } else {
+        Write-UiLog 'Connection test: FAILED'
+        Show-Msg "Saved, but the connection test FAILED. Try Connect again." 'Warning'
+    }
+    $cbVault.SelectedItem = $Name
+    return $true
+}
+
+$btnConnect.Add_Click({
     if (-not (Test-Path $Rclone)) { Show-Msg "rclone.exe missing in $Root\bin" 'Error'; return }
-    Show-Msg "A setup window will open.`n`n1. Type n (new remote)`n2. Name it:  clientbackup`n3. Answer the questions for the cloud (OneDrive, Google Drive, B2...)`n4. Type q to quit when done.`n`n$AppName will then encrypt it into the vault."
+    if (-not (Clean-Name $tClient.Text)) { Show-Msg 'Type the client name at the top first.' 'Warning'; return }
+    $name = Get-ClientName
     $tmp = Join-Path $env:TEMP ("rtkit_{0}.conf" -f [guid]::NewGuid())
-    Start-Process -FilePath $Rclone -ArgumentList @('config', '--config', "`"$tmp`"") -Wait
-    if (Test-Path $tmp) {
-        try { Add-ConfigToVault $tmp } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-    } else { Write-UiLog 'No config was created.' }
+
+    switch ($cbCloud.SelectedIndex) {
+        0 { $rcArgs = @('config', 'create', 'clientbackup', 'drive', 'scope=drive', '--config', "`"$tmp`"")
+            $tip = "Your browser will open.`nSign in to the client's Google account and click Allow.`n`nIf the black window asks a question, just press Enter." }
+        1 { $rcArgs = @('config', 'create', 'clientbackup', 'onedrive', '--config', "`"$tmp`"")
+            $tip = "Your browser will open.`nSign in to the client's Microsoft account and click Accept.`n`nIf the black window asks to pick a drive, type 1 then Enter, and y to confirm." }
+        default { $rcArgs = @('config', '--config', "`"$tmp`"")
+            $tip = "Manual setup:`n1. Type n (new remote)`n2. Name it:  clientbackup`n3. Answer the questions for the cloud`n4. Type q to quit when done." }
+    }
+    Show-Msg $tip
+    Write-UiLog "Connecting $($cbCloud.SelectedItem) for $name ..."
+    $lblBusy.Text = "$([char]0x25CF)  WAITING FOR SIGN-IN"; $lblBusy.ForeColor = $Clr.Warn
+    try {
+        Start-Process -FilePath $Rclone -ArgumentList $rcArgs -Wait
+        if (Test-Path $tmp) { [void](Add-ConfigToVault $tmp $name) }
+        else { Write-UiLog 'Nothing was saved (sign-in cancelled?).' }
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        $lblBusy.Text = "$([char]0x25CF)  READY"; $lblBusy.ForeColor = $Clr.Ok
+    }
 })
 
 $btnImportCfg.Add_Click({
+    if (-not (Clean-Name $tClient.Text)) { Show-Msg 'Type the client name at the top first.' 'Warning'; return }
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = 'rclone config (*.conf)|*.conf|All files (*.*)|*.*'
     if ($dlg.ShowDialog() -ne 'OK') { return }
-    Add-ConfigToVault $dlg.FileName
-    if (Ask-YesNo "Delete the unencrypted original?`n$($dlg.FileName)") {
+    if ((Add-ConfigToVault $dlg.FileName (Get-ClientName)) -and (Ask-YesNo "Delete the unencrypted original?`n$($dlg.FileName)")) {
         Remove-Item $dlg.FileName -Force -ErrorAction SilentlyContinue
         Write-UiLog 'Original deleted.'
     }
 })
 
 $btnTestCfg.Add_Click({
-    if (-not $lbVault.SelectedItem) { Show-Msg 'Select a config first.' 'Warning'; return }
-    $tmp = Join-Path $env:TEMP ("rtkit_{0}.conf" -f [guid]::NewGuid())
-    try {
-        [IO.File]::WriteAllBytes($tmp, (Read-FromVault $lbVault.SelectedItem))
-        Write-UiLog "Testing $($lbVault.SelectedItem)..."
-        & $Rclone lsd 'clientbackup:' --config $tmp --max-depth 1 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-UiLog 'Connection OK' } else { Write-UiLog 'Connection FAILED' }
-    } catch { Write-UiLog "ERROR: $_" }
-    finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    if (-not $lbVault.SelectedItem) { Show-Msg 'Select a client first.' 'Warning'; return }
+    Write-UiLog "Testing $($lbVault.SelectedItem)..."
+    if (Test-VaultConfig $lbVault.SelectedItem) { Write-UiLog 'Connection OK' } else { Write-UiLog 'Connection FAILED' }
 })
 
 $btnDelCfg.Add_Click({
     if (-not $lbVault.SelectedItem) { return }
-    if (Ask-YesNo "Delete config '$($lbVault.SelectedItem)' from the vault?") {
+    if (Ask-YesNo "Delete the saved cloud login for '$($lbVault.SelectedItem)'?") {
         Remove-Item (Join-Path $VaultDir "$($lbVault.SelectedItem).conf.enc") -Force
         Write-UiLog "Deleted $($lbVault.SelectedItem)"
         Update-VaultLists
     }
 })
+
+$lbVault.Add_SelectedIndexChanged({ if ($lbVault.SelectedItem -and -not $tClient.Text) { $tClient.Text = $lbVault.SelectedItem } })
 
 # ==========================================================
 #  TAB: Virus Scan (Microsoft Defender)

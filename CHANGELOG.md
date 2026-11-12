@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.0 - 2026-11-11
+
+- Simpler Cloud Vault: pick Google Drive or OneDrive, click CONNECT CLOUD, sign in. The remote is named, encrypted, saved under the client name and tested automatically
+- Manual rclone setup kept as "Other (manual setup)"
+
 ## v1.1.0 - 2026-11-11
 
 - Backup Agent page: Stop current backup, Pause agent and Resume agent buttons
