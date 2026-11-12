@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0 - 2026-11-11
+
+- Backup Agent page: Stop current backup, Pause agent and Resume agent buttons
+- Check status shows when the agent is paused
+- Remove agent stops any running backup first
+
 ## v1.0.0 - 2026-11-11
 
 - RT Kit GUI with dark theme and sidebar navigation

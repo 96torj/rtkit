@@ -595,9 +595,12 @@ $tabAgent.Controls.Add($tExtra)
 $btnInstall = New-BigButton 'INSTALL AGENT' 160 140 230
 $btnStatus  = New-Button 'Check status' 420 150 140
 $btnRunNow  = New-Button 'Run backup now' 575 150 140
-$btnRemove  = New-DangerButton 'Remove agent' 420 195 140
-$tabAgent.Controls.AddRange(@($btnInstall, $btnStatus, $btnRunNow, $btnRemove))
-$tabAgent.Controls.Add((New-Label 'Uses the client name at the top. The cloud config must contain a remote named clientbackup.' 15 250 700))
+$btnStopRun = New-Button 'Stop current backup' 420 195 140
+$btnPause   = New-Button 'Pause agent' 575 195 140
+$btnResume  = New-Button 'Resume agent' 420 240 140
+$btnRemove  = New-DangerButton 'Remove agent' 575 240 140
+$tabAgent.Controls.AddRange(@($btnInstall, $btnStatus, $btnRunNow, $btnStopRun, $btnPause, $btnResume, $btnRemove))
+$tabAgent.Controls.Add((New-Label 'Stop = ends the backup running now (nightly runs continue).  Pause = stops it AND turns off nightly runs until Resume.' 15 290 720))
 
 $cbVault.Add_SelectedIndexChanged({ if (-not $tClient.Text) { $tClient.Text = $cbVault.SelectedItem } })
 
@@ -661,6 +664,7 @@ $btnStatus.Add_Click({
     if (-not $task) { Write-UiLog 'Agent is NOT installed on this PC.'; return }
     $ti = $task | Get-ScheduledTaskInfo
     Write-UiLog '----- Agent status -----'
+    if ($task.State -eq 'Disabled') { Write-UiLog 'Agent      : PAUSED (nightly backups are off - click Resume agent)' }
     Write-UiLog "Task state : $($task.State)"
     Write-UiLog "Last run   : $($ti.LastRunTime)"
     Write-UiLog "Next run   : $($ti.NextRunTime)"
@@ -674,8 +678,49 @@ $btnRunNow.Add_Click({
     Write-UiLog 'Backup started in the background. Use Check status later.'
 })
 
+function Stop-AgentRun {
+    # End the scheduled task, then any agent PowerShell / rclone left running
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*backup-agent.ps1*' } |
+        ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }
+    Get-Process rclone -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "$AgentDir*" } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-Item "$AgentDir\running.lock" -Force -ErrorAction SilentlyContinue
+}
+
+$btnStopRun.Add_Click({
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Write-UiLog 'Agent is NOT installed.'; return }
+    if (-not (Ask-YesNo "Stop the backup running now?`n`nFiles already uploaded are kept. Nightly backups stay ON.")) { return }
+    Stop-AgentRun
+    Write-UiLog 'Current backup stopped. Nightly backups are still scheduled.'
+    [void](Save-Report 'Agent-Stop' @('Running backup stopped by technician. Schedule unchanged.'))
+})
+
+$btnPause.Add_Click({
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Write-UiLog 'Agent is NOT installed.'; return }
+    if (-not (Ask-YesNo "Pause the agent?`n`nThis stops any backup running now AND turns off nightly backups until you click Resume.")) { return }
+    Stop-AgentRun
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+    Write-UiLog 'Agent PAUSED. No backups will run until you click Resume agent.'
+    [void](Save-Report 'Agent-Pause' @('Agent paused: running backup stopped, nightly schedule disabled.'))
+})
+
+$btnResume.Add_Click({
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { Write-UiLog 'Agent is NOT installed.'; return }
+    Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+    Write-UiLog 'Agent RESUMED. Nightly backups are back on.'
+    [void](Save-Report 'Agent-Resume' @('Agent resumed: nightly schedule enabled.'))
+    if (Ask-YesNo 'Run a backup now? It continues where it left off.') {
+        Start-ScheduledTask -TaskName $TaskName
+        Write-UiLog 'Backup started in the background.'
+    }
+})
+
 $btnRemove.Add_Click({
     if (-not (Ask-YesNo 'Remove the backup agent from this PC? Files already in the cloud are kept.')) { return }
+    Stop-AgentRun
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item $AgentDir -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path $AgentDir) { Write-UiLog "Could not fully delete $AgentDir" } else { Write-UiLog 'Agent removed.'; [void](Save-Report 'Agent-Remove' @('Agent removed from this PC.')) }
